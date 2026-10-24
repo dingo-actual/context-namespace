@@ -1,0 +1,312 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  rust:
+    name: Rust / quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Check README copies
+        run: cmp README.md crates/context-namespace/README.md
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          rustflags: ""
+
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Check Cargo metadata
+        run: cargo metadata --locked --format-version 1 --no-deps
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy — core crate
+        run: >
+          cargo clippy
+          -p context-namespace
+          --all-targets
+          --all-features
+          --locked
+          --
+          -D warnings
+
+      - name: Clippy — Python binding crate
+        run: >
+          cargo clippy
+          -p context-namespace-py
+          --lib
+          --locked
+          --
+          -D warnings
+
+      - name: Test core crate
+        run: >
+          cargo nextest run
+          -p context-namespace
+          --all-features
+          --locked
+
+      - name: Test doctests
+        run: >
+          cargo test
+          -p context-namespace
+          --doc
+          --all-features
+          --locked
+
+      - name: Check minimal feature build
+        run: >
+          cargo check
+          -p context-namespace
+          --no-default-features
+          --locked
+
+      - name: Check binding crate
+        run: >
+          cargo check
+          -p context-namespace-py
+          --locked
+
+      - name: Build documentation
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: >
+          cargo doc
+          -p context-namespace
+          --all-features
+          --no-deps
+          --locked
+
+
+  msrv:
+    name: Rust / MSRV 1.85
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Rust 1.85
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.85"
+          rustflags: ""
+
+      - name: Check core crate
+        run: >
+          cargo check
+          -p context-namespace
+          --all-features
+          --locked
+
+      - name: Check binding crate
+        run: >
+          cargo check
+          -p context-namespace-py
+          --locked
+
+
+  python-quality:
+    name: Python / quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Install Python quality dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --group dev
+
+      - name: Ruff
+        run: ruff check python tests/python
+
+      - name: Pyright
+        run: pyright python tests/python
+
+      - name: mypy
+        run: mypy python/context_namespace
+
+  python:
+    name: Python / ${{ matrix.os }} / ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.11"
+          - os: ubuntu-latest
+            python: "3.12"
+          - os: ubuntu-latest
+            python: "3.13"
+          - os: ubuntu-latest
+            python: "3.14"
+
+          - os: macos-latest
+            python: "3.11"
+          - os: macos-latest
+            python: "3.14"
+
+          - os: windows-latest
+            python: "3.11"
+          - os: windows-latest
+            python: "3.14"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          rustflags: ""
+          cache-key: python-${{ matrix.python }}
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --group test
+
+      - name: Build and install package
+        run: python -m pip install .
+
+      - name: Run Python tests
+        run: python -m pytest tests/python -v
+
+      - name: Check installed package version
+        shell: python
+        run: |
+          import importlib.metadata
+          import context_namespace
+
+          distribution_version = importlib.metadata.version(
+              "context-namespace"
+          )
+
+          assert context_namespace.__version__ == distribution_version, (
+              context_namespace.__version__,
+              distribution_version,
+          )
+
+
+  package:
+    name: Package / artifacts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          rustflags: ""
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Install validation tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install twine check-wheel-contents
+
+      - name: Inspect Rust package contents
+        run: cargo package -p context-namespace --list
+
+      - name: Validate Rust package
+        run: >
+          cargo publish
+          -p context-namespace
+          --dry-run
+          --locked
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          maturin-version: v1.15.0
+          manylinux: "2_17"
+          args: >
+            --release
+            --locked
+            --compatibility pypi
+            --out dist
+
+      - name: Build source distribution
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          maturin-version: v1.15.0
+          args: >
+            --out dist
+
+      - name: Check Python metadata
+        run: python -m twine check --strict dist/*
+
+      - name: Check wheel contents
+        run: check-wheel-contents dist/*.whl
+
+      - name: Install produced wheel
+        run: python -m pip install --force-reinstall dist/*.whl
+
+      - name: Smoke test installed wheel
+        shell: python
+        run: |
+          import context_namespace
+          from context_namespace import ContextNamespace, NamespaceConfig
+
+          ns = ContextNamespace(config=NamespaceConfig())
+          assert ns is not None
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: distributions
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
