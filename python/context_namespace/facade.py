@@ -73,6 +73,7 @@ from .errors import (
 from .models import (
     AppendReceipt,
     Capabilities,
+    ChildDescriptor,
     ExpansionReceipt,
     MaintenanceEstimate,
     MaintenanceReceipt,
@@ -165,6 +166,29 @@ def _to_dataclass(obj: object) -> dict[str, object]:
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         return dataclasses.asdict(obj)  # type: ignore[arg-type]
     raise TypeError(f"expected dict or dataclass, got {type(obj).__name__}")
+
+
+def _build_summary_input(prepared: _PyPreparedSummary) -> SummaryInput:
+    """Converts a native prepared summary into the summarizer-facing input.
+
+    Args:
+        prepared: The native prepared summary handle.
+
+    Returns:
+        A SummaryInput with its child descriptors converted.
+    """
+    return SummaryInput(
+        request_id=prepared.request_id,
+        source=prepared.source,
+        children=tuple(
+            ChildDescriptor(
+                node_id=c.node_id, label=c.label, summary=c.summary, gloss=c.gloss
+            )
+            for c in prepared.children
+        ),
+        max_summary_chars=prepared.max_summary_chars,
+        max_gloss_chars=prepared.max_gloss_chars,
+    )
 
 
 class ContextNamespace:
@@ -283,13 +307,7 @@ class ContextNamespace:
         prepared = self._native._prepare_records(
             render_id, start_index, end_index, label
         )
-        inp = SummaryInput(
-            request_id=prepared.request_id,
-            source=prepared.source,
-            children=(),
-            max_summary_chars=prepared.max_summary_chars,
-            max_gloss_chars=prepared.max_gloss_chars,
-        )
+        inp = _build_summary_input(prepared)
         try:
             result = await summarizer.summarize(inp)
         except BaseException:
@@ -328,13 +346,7 @@ class ContextNamespace:
         prepared = self._native._prepare_text(
             render_id, record_index, start_char, end_char, label
         )
-        inp = SummaryInput(
-            request_id=prepared.request_id,
-            source=prepared.source,
-            children=(),
-            max_summary_chars=prepared.max_summary_chars,
-            max_gloss_chars=prepared.max_gloss_chars,
-        )
+        inp = _build_summary_input(prepared)
         try:
             result = await summarizer.summarize(inp)
         except BaseException:
@@ -376,13 +388,7 @@ class ContextNamespace:
         prepared = self._native._plan_maintenance(native_estimate)
         if prepared is None:
             return MaintenanceReceipt.no_action()
-        inp = SummaryInput(
-            request_id=prepared.request_id,
-            source=prepared.source,
-            children=(),
-            max_summary_chars=prepared.max_summary_chars,
-            max_gloss_chars=prepared.max_gloss_chars,
-        )
+        inp = _build_summary_input(prepared)
         try:
             result = await summarizer.summarize(inp)
         except BaseException:

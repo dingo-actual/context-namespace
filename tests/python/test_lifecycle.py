@@ -18,8 +18,11 @@ from conftest import (
     summarize_text_sync,
 )
 from context_namespace import (
+    ChildDescriptor,
     ContextNamespace,
     NamespaceConfig,
+    SummaryInput,
+    SummaryResult,
 )
 
 
@@ -362,6 +365,93 @@ class TestTextSliceAndRecordRangeInteraction:
             label="text-node",
         )
         assert ns.stats().nodes == 2
+
+
+class CapturingSummarizer:
+    """Records each SummaryInput and returns a fixed, recognizable result."""
+
+    def __init__(self) -> None:
+        self.inputs: list[SummaryInput] = []
+
+    async def summarize(self, inp: SummaryInput) -> SummaryResult:
+        self.inputs.append(inp)
+        return SummaryResult(summary="captured summary", gloss="captured gloss")
+
+
+class TestSummarizerChildDescriptors:
+    """Verify summarizer callbacks receive the selection's child descriptors."""
+
+    @staticmethod
+    def _summarize_cd(ns: ContextNamespace) -> tuple[str, CapturingSummarizer]:
+        view = ns.render()
+        summarizer = CapturingSummarizer()
+        receipt = summarize_text_sync(
+            ns,
+            render_id=view.render_id,
+            record_index=0,
+            start_char=2,
+            end_char=4,
+            label="cd",
+            summarizer=summarizer,
+        )
+        return receipt.node_id, summarizer
+
+    def test_text_selection_spanning_a_reference_passes_child_descriptors(self):
+        ns = ContextNamespace(config=NamespaceConfig())
+        ns.append(make_record("abcdef"))
+        cd_id, cd_summarizer = self._summarize_cd(ns)
+
+        parent = CapturingSummarizer()
+        view = ns.render()
+        summarize_text_sync(
+            ns,
+            render_id=view.render_id,
+            record_index=0,
+            start_char=1,
+            end_char=3,
+            label="parent",
+            summarizer=parent,
+        )
+
+        expected = ChildDescriptor(
+            node_id=cd_id,
+            label="cd",
+            summary="captured summary",
+            gloss="captured gloss",
+        )
+        (inp,) = parent.inputs
+        assert inp.source == "be"
+        assert inp.children == (expected,)
+        assert cd_summarizer.inputs[0].children == ()
+        assert {n.path for n in ns.list_nodes()} >= {"/parent", "/parent/cd"}
+
+    def test_record_range_selection_containing_a_node_passes_child_descriptors(self):
+        ns = ContextNamespace(config=NamespaceConfig())
+        ns.append(make_record("alpha"))
+        ns.append(make_record("beta"))
+        view = ns.render()
+        cd = summarize_records_sync(
+            ns,
+            render_id=view.render_id,
+            start_index=0,
+            end_index=1,
+            label="batch",
+        )
+
+        parent = CapturingSummarizer()
+        view2 = ns.render()
+        summarize_records_sync(
+            ns,
+            render_id=view2.render_id,
+            start_index=0,
+            end_index=2,
+            label="parent",
+            summarizer=parent,
+        )
+
+        (inp,) = parent.inputs
+        assert [c.node_id for c in inp.children] == [cd.node_id]
+        assert inp.children[0].label == "batch"
 
 
 class TestMaintenanceLifecycle:

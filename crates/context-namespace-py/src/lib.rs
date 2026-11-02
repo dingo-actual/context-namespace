@@ -312,6 +312,8 @@ struct PyPreparedSummary {
     #[pyo3(get)]
     source: String,
     #[pyo3(get)]
+    children: Vec<PyChildDescriptor>,
+    #[pyo3(get)]
     max_summary_chars: u32,
     #[pyo3(get)]
     max_gloss_chars: u32,
@@ -329,6 +331,8 @@ struct PyChildDescriptor {
     node_id: String,
     #[pyo3(get)]
     label: String,
+    #[pyo3(get)]
+    summary: String,
     #[pyo3(get)]
     gloss: String,
 }
@@ -435,10 +439,22 @@ fn build_prepared_summary(prepared: context_namespace::PreparedSummary) -> PyPre
     let max_summary = prepared.input.max_summary_chars;
     let max_gloss = prepared.input.max_gloss_chars;
     let source = prepared.input.source.clone();
+    let children = prepared
+        .input
+        .children
+        .iter()
+        .map(|child| PyChildDescriptor {
+            node_id: child.node_id.to_string(),
+            label: child.label.clone(),
+            summary: child.summary.clone(),
+            gloss: child.gloss.clone(),
+        })
+        .collect();
     let request_id = prepared.request_id.to_string();
     PyPreparedSummary {
         request_id,
         source,
+        children,
         max_summary_chars: max_summary,
         max_gloss_chars: max_gloss,
         inner: Some(prepared),

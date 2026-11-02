@@ -40,11 +40,13 @@ class ChildDescriptor:
     Attributes:
         node_id: The immutable ID of the child node.
         label: The child node's label.
+        summary: The child node's summary text.
         gloss: The child node's gloss text.
     """
 
     node_id: str
     label: str
+    summary: str
     gloss: str
 
 

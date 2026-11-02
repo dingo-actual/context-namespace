@@ -172,6 +172,7 @@ class _PyPreparedSummary:
     Attributes:
         request_id: The request ID associated with this summary.
         source: The rendered source text extracted from canonical state.
+        children: Descriptors for the child nodes referenced by the source.
         max_summary_chars: Policy-enforced max character length for the
             summary.
         max_gloss_chars: Policy-enforced max character length for the gloss.
@@ -179,6 +180,7 @@ class _PyPreparedSummary:
 
     request_id: str
     source: str
+    children: list[_PyChildDescriptor]
     max_summary_chars: int
     max_gloss_chars: int
 
@@ -259,11 +261,13 @@ class _PyChildDescriptor:
     Attributes:
         node_id: The immutable ID of the child node.
         label: The child node's label.
+        summary: The child node's summary text.
         gloss: The child node's gloss text.
     """
 
     node_id: str
     label: str
+    summary: str
     gloss: str
 
 @final
