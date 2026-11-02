@@ -272,6 +272,138 @@ fn expanded_text_slice_node_inlines_source_segments_exactly_once() {
     ns.validate().expect("invariants after nested expansion");
 }
 
+#[test]
+fn disjoint_text_slices_round_trip_to_original_text() {
+    let mut ns = ContextNamespace::new(config()).expect("valid config");
+    ns.append(make_record("abcdef")).expect("append");
+
+    // Slice "cd" out, so the record render becomes text + ref + text.
+    let view = ns.render().expect("render");
+    let prepared = ns
+        .prepare_text_summary(
+            TextSelection {
+                record: RecordLocator::Visible {
+                    render_id: view.render_id,
+                    index: 0,
+                },
+                start_char: 2,
+                end_char: 4,
+            },
+            make_label("cd"),
+        )
+        .expect("prepare cd");
+    ns.commit_summary(
+        prepared,
+        SummaryResult {
+            summary: "C D".to_string(),
+            gloss: "cd".to_string(),
+        },
+    )
+    .expect("commit cd");
+
+    // Slice "a" out of the leading text segment.
+    let view = ns.render().expect("render");
+    let prepared = ns
+        .prepare_text_summary(
+            TextSelection {
+                record: RecordLocator::Visible {
+                    render_id: view.render_id,
+                    index: 0,
+                },
+                start_char: 0,
+                end_char: 1,
+            },
+            make_label("a"),
+        )
+        .expect("prepare a");
+    ns.commit_summary(
+        prepared,
+        SummaryResult {
+            summary: "A".to_string(),
+            gloss: "a".to_string(),
+        },
+    )
+    .expect("commit a");
+
+    for label in ["/a", "/cd"] {
+        let path = NamespacePath::parse(label, &DefensiveLimits::portfolio_defaults())
+            .expect("valid path");
+        ns.expand(&path, 1).expect("expand");
+    }
+
+    let view = ns.render().expect("render");
+    assert!(
+        view.json.contains(r#""content":"abcdef""#),
+        "expanded slices must reconstruct the source text once: {}",
+        view.json
+    );
+    ns.validate().expect("invariants after expansion");
+}
+
+#[test]
+fn text_slice_starting_on_a_zero_length_ref_nests_it() {
+    let mut ns = ContextNamespace::new(config()).expect("valid config");
+    ns.append(make_record("abcdef")).expect("append");
+
+    // Slice "cd" out, so the record render becomes "ab" + ref + "ef".
+    let view = ns.render().expect("render");
+    let prepared = ns
+        .prepare_text_summary(
+            TextSelection {
+                record: RecordLocator::Visible {
+                    render_id: view.render_id,
+                    index: 0,
+                },
+                start_char: 2,
+                end_char: 4,
+            },
+            make_label("cd"),
+        )
+        .expect("prepare cd");
+    ns.commit_summary(
+        prepared,
+        SummaryResult {
+            summary: "C D".to_string(),
+            gloss: "cd".to_string(),
+        },
+    )
+    .expect("commit cd");
+
+    // Slice "e": the range starts exactly on the /cd ref, which has zero
+    // char width, so /cd must become a child of /e.
+    let view = ns.render().expect("render");
+    let prepared = ns
+        .prepare_text_summary(
+            TextSelection {
+                record: RecordLocator::Visible {
+                    render_id: view.render_id,
+                    index: 0,
+                },
+                start_char: 2,
+                end_char: 3,
+            },
+            make_label("e"),
+        )
+        .expect("prepare e");
+    ns.commit_summary(
+        prepared,
+        SummaryResult {
+            summary: "E".to_string(),
+            gloss: "e".to_string(),
+        },
+    )
+    .expect("commit e");
+
+    let view = ns.render().expect("render");
+    assert!(
+        view.json.contains("[summary(/e): E; gloss(/e/cd): cd]"),
+        "a ref at the slice start must nest under the slice: {}",
+        view.json
+    );
+    assert!(!view.json.contains("[summary(/cd)"));
+    ns.validate().expect("invariants after boundary ref slice");
+}
+
 // ---------------------------------------------------------------------------
 // Render: expansion expires after TTL renders
 // ---------------------------------------------------------------------------

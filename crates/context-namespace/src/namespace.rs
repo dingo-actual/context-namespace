@@ -1816,8 +1816,8 @@ impl ContextNamespace {
         let mut char_pos = 0usize;
         let mut seg_start = None;
         let mut seg_end = None;
-        let mut prefix_text = String::new();
-        let mut suffix_text = String::new();
+        let mut leading_text = String::new();
+        let mut trailing_text = String::new();
         let mut source_segments: Vec<Segment> = Vec::new();
         let mut child_node_ids = Vec::new();
 
@@ -1834,17 +1834,12 @@ impl ContextNamespace {
 
             let seg_end_char = char_pos + seg_len;
 
-            if seg_end_char <= start {
-                // Entirely before the range — prefix.
-                if let Segment::Text(text) = seg {
-                    prefix_text.push_str(text);
-                }
-            } else if char_pos >= end {
-                // Entirely after the range — suffix.
-                if let Segment::Text(text) = seg {
-                    suffix_text.push_str(text);
-                }
-            } else {
+            let in_range = match seg {
+                Segment::Ref(_) => start <= char_pos && char_pos < end,
+                Segment::Text(_) => char_pos < end && seg_end_char > start,
+            };
+
+            if in_range {
                 // Overlaps the range.
                 if let Segment::Ref(node_id) = seg {
                     // Ref is fully contained — becomes child.
@@ -1860,7 +1855,7 @@ impl ContextNamespace {
                     let local_end = end.min(seg_end_char) - char_pos;
                     // Text before the range within this segment.
                     if local_start > 0 {
-                        prefix_text.extend(&chars[..local_start]);
+                        leading_text = chars[..local_start].iter().collect();
                     }
                     // Text in the range becomes one stored source segment.
                     source_segments.push(Segment::Text(
@@ -1868,7 +1863,7 @@ impl ContextNamespace {
                     ));
                     // Text after the range within this segment.
                     if local_end < chars.len() {
-                        suffix_text.extend(&chars[local_end..]);
+                        trailing_text = chars[local_end..].iter().collect();
                     }
                     if seg_start.is_none() {
                         seg_start = Some(si);
@@ -1885,14 +1880,15 @@ impl ContextNamespace {
             segments: source_segments,
         };
 
-        // Build new segments: prefix_text + Ref(new_node) + suffix_text.
+        // Build new segments: leading leftovers + Ref(new_node) + trailing
+        // leftovers. Whole segments outside the splice stay untouched.
         let mut new_segments = Vec::new();
-        if !prefix_text.is_empty() {
-            new_segments.push(Segment::Text(prefix_text.clone()));
+        if !leading_text.is_empty() {
+            new_segments.push(Segment::Text(leading_text));
         }
         new_segments.push(Segment::Ref(new_node_id));
-        if !suffix_text.is_empty() {
-            new_segments.push(Segment::Text(suffix_text.clone()));
+        if !trailing_text.is_empty() {
+            new_segments.push(Segment::Text(trailing_text));
         }
 
         let text_edit = TextEdit {
