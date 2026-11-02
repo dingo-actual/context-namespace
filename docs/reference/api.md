@@ -366,8 +366,8 @@ Removes a pending request without mutating canonical state.
 |---|---|---|
 | `node_id` | `NodeId` | The child node's immutable ID |
 | `label` | `String` | The child node's label |
-| `summary` | `String` | The child node's summary text |
 | `gloss` | `String` | The child node's gloss text |
+| `summary` | `String` | The child node's summary text (optional, defaults to empty) |
 
 ### `PreparedSummary`
 

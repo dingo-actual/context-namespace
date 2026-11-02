@@ -361,12 +361,14 @@ from context_namespace import (
     SummaryResult,
 )
 
+
 class StubSummarizer:
     async def summarize(self, request):
         return SummaryResult(
             summary=f"Summary of {len(request.source)} chars",
             gloss="test-gloss",
         )
+
 
 ns = ContextNamespace(config=NamespaceConfig())
 for i in range(5):

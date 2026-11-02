@@ -181,9 +181,7 @@ def _build_summary_input(prepared: _PyPreparedSummary) -> SummaryInput:
         request_id=prepared.request_id,
         source=prepared.source,
         children=tuple(
-            ChildDescriptor(
-                node_id=c.node_id, label=c.label, summary=c.summary, gloss=c.gloss
-            )
+            ChildDescriptor(node_id=c.node_id, label=c.label, summary=c.summary, gloss=c.gloss)
             for c in prepared.children
         ),
         max_summary_chars=prepared.max_summary_chars,
@@ -304,9 +302,7 @@ class ContextNamespace:
         Returns:
             A SummaryReceipt with the new node ID and replaced records.
         """
-        prepared = self._native._prepare_records(
-            render_id, start_index, end_index, label
-        )
+        prepared = self._native._prepare_records(render_id, start_index, end_index, label)
         inp = _build_summary_input(prepared)
         try:
             result = await summarizer.summarize(inp)
@@ -343,9 +339,7 @@ class ContextNamespace:
         Returns:
             A SummaryReceipt with the new node ID.
         """
-        prepared = self._native._prepare_text(
-            render_id, record_index, start_char, end_char, label
-        )
+        prepared = self._native._prepare_text(render_id, record_index, start_char, end_char, label)
         inp = _build_summary_input(prepared)
         try:
             result = await summarizer.summarize(inp)
@@ -429,9 +423,7 @@ class ContextNamespace:
             An ExpansionReceipt with the effective TTL.
         """
         r = self._native.expand(path, ttl_renders)
-        return ExpansionReceipt(
-            node_id=r.node_id, ttl_renders=r.ttl_renders, render_id=r.render_id
-        )
+        return ExpansionReceipt(node_id=r.node_id, ttl_renders=r.ttl_renders, render_id=r.render_id)
 
     @_map_native_errors
     def collapse(self, path: str) -> ExpansionReceipt:
@@ -447,9 +439,7 @@ class ContextNamespace:
             An ExpansionReceipt with ttl_renders set to 0.
         """
         r = self._native.collapse(path)
-        return ExpansionReceipt(
-            node_id=r.node_id, ttl_renders=r.ttl_renders, render_id=r.render_id
-        )
+        return ExpansionReceipt(node_id=r.node_id, ttl_renders=r.ttl_renders, render_id=r.render_id)
 
     @_map_native_errors
     def is_expanded(self, path: str) -> bool:
@@ -541,9 +531,7 @@ class ContextNamespace:
 
     @classmethod
     @_map_native_errors
-    def restore(
-        cls, data: bytes, *, config: NamespaceConfig | None = None
-    ) -> ContextNamespace:
+    def restore(cls, data: bytes, *, config: NamespaceConfig | None = None) -> ContextNamespace:
         """Rebuilds a namespace from snapshot bytes.
 
         Args:

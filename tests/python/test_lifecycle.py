@@ -375,8 +375,8 @@ class CapturingSummarizer:
     def __init__(self) -> None:
         self.inputs: list[SummaryInput] = []
 
-    async def summarize(self, inp: SummaryInput) -> SummaryResult:
-        self.inputs.append(inp)
+    async def summarize(self, request: SummaryInput) -> SummaryResult:
+        self.inputs.append(request)
         return SummaryResult(summary="captured summary", gloss="captured gloss")
 
 
@@ -470,9 +470,7 @@ class TestMaintenanceLifecycle:
         ns = ContextNamespace(config=NamespaceConfig())
         for i in range(12):
             ns.append(make_record(f"record {i} with some content here"))
-        result = maintain_sync(
-            ns, estimated_next_tokens=50_000, per_record_tokens=5_000
-        )
+        result = maintain_sync(ns, estimated_next_tokens=50_000, per_record_tokens=5_000)
         assert result.action == "summarized"
         assert result.receipt is not None
         assert result.receipt.node_id

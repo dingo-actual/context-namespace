@@ -125,9 +125,7 @@ def make_record(content: str, role: str = "user") -> dict[str, str]:
     return {"role": role, "content": content}
 
 
-def append_records(
-    ns: ContextNamespace, count: int, prefix: str = "record"
-) -> ContextNamespace:
+def append_records(ns: ContextNamespace, count: int, prefix: str = "record") -> ContextNamespace:
     """Appends N records to a namespace and returns it.
 
     Args:

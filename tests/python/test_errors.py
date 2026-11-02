@@ -8,6 +8,8 @@ type is raised.
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 from conftest import (
     FailingSummarizer,
@@ -27,6 +29,7 @@ from context_namespace import (
     ReservedKeyCollisionError,
     SnapshotVersionError,
     StaleRenderError,
+    SummaryInput,
     SummaryResult,
     UnknownPathError,
 )
@@ -183,12 +186,12 @@ class TestSummarizerErrorCancels:
 
 
 class FixedSummarizer:
-    """A summarizer that returns a fixed object, valid or not."""
+    """A summarizer that returns a fixed result, valid or not."""
 
-    def __init__(self, result: object) -> None:
+    def __init__(self, result: SummaryResult) -> None:
         self.result = result
 
-    async def summarize(self, request) -> object:
+    async def summarize(self, request: SummaryInput) -> SummaryResult:
         return self.result
 
 
@@ -239,7 +242,7 @@ class TestFailedCommitReleasesPending:
                 start_index=0,
                 end_index=2,
                 label="batch",
-                summarizer=FixedSummarizer(SummaryResult(summary=123, gloss="g")),
+                summarizer=FixedSummarizer(SummaryResult(summary=cast(str, 123), gloss="g")),
             )
         self._assert_valid_retry_succeeds(ns)
 
@@ -253,6 +256,6 @@ class TestFailedCommitReleasesPending:
                 start_index=0,
                 end_index=2,
                 label="batch",
-                summarizer=FixedSummarizer(object()),
+                summarizer=FixedSummarizer(cast(SummaryResult, object())),
             )
         self._assert_valid_retry_succeeds(ns)

@@ -1,5 +1,6 @@
 import pytest
 from context_namespace import (
+    ChildDescriptor,
     ContextNamespace,
     InvalidRecordError,
     InvalidSelectionError,
@@ -26,6 +27,15 @@ def make_config():
 
 def make_record(content: str, role: str = "user"):
     return {"role": role, "content": content}
+
+
+def test_child_descriptor_keeps_released_constructor_signature():
+    positional = ChildDescriptor("n", "l", "g")
+    keyword = ChildDescriptor(node_id="n", label="l", gloss="g")
+
+    assert positional == keyword
+    assert positional.summary == ""
+    assert (positional.node_id, positional.label, positional.gloss) == ("n", "l", "g")
 
 
 def test_append_and_stats():
