@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 from conftest import (
     CountingSummarizer,
+    FailingSummarizer,
     append_records,
     maintain_sync,
     make_record,
@@ -21,6 +22,7 @@ from context_namespace import (
     ChildDescriptor,
     ContextNamespace,
     NamespaceConfig,
+    PolicyConfig,
     SummaryInput,
     SummaryResult,
 )
@@ -486,6 +488,40 @@ class TestMaintenanceLifecycle:
             summarizer=summarizer,
         )
         assert summarizer.call_count == 0
+
+    def test_failed_maintenance_keeps_expansion_alive(self):
+        """A failing summarizer must not consume an expansion's last render."""
+        config = NamespaceConfig(
+            policy=PolicyConfig(
+                trigger_tokens=1_000,
+                target_tokens=100,
+                preserve_prefix_records=1,
+                preserve_recent_records=1,
+            )
+        )
+        ns = ContextNamespace(config=config)
+        append_records(ns, 4)
+
+        view = ns.render()
+        summarize_records_sync(
+            ns,
+            render_id=view.render_id,
+            start_index=0,
+            end_index=1,
+            label="protected",
+        )
+        ns.expand("/protected", ttl_renders=1)
+        assert ns.is_expanded("/protected") is True
+
+        with pytest.raises(RuntimeError, match="inference failed"):
+            maintain_sync(
+                ns,
+                estimated_next_tokens=50_000,
+                per_record_tokens=5_000,
+                summarizer=FailingSummarizer(RuntimeError("inference failed")),
+            )
+
+        assert ns.is_expanded("/protected") is True
 
 
 class TestRenderDeterminism:

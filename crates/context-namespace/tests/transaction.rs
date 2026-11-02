@@ -1,6 +1,6 @@
 use context_namespace::{
-    ContextNamespace, DefensiveLimits, NamespaceConfig, NamespacePath, NewRecord, NodeLabel,
-    RecordLocator, RecordSelection, SummaryResult, TextSelection,
+    ContextNamespace, DefensiveLimits, NamespaceConfig, NamespaceError, NamespacePath, NewRecord,
+    NodeId, NodeLabel, RecordLocator, RecordSelection, SummaryResult, TextSelection,
 };
 use indexmap::IndexMap;
 use std::num::NonZeroU32;
@@ -384,6 +384,237 @@ fn commit_record_summary_result_too_long_returns_error() {
     // State unchanged.
     assert_eq!(ns.stats().nodes, 0);
     assert_eq!(ns.stats().records, 3);
+}
+
+// ---------------------------------------------------------------------------
+// Commit: policy caps are enforced even when defensive limits are looser
+// ---------------------------------------------------------------------------
+
+/// Builds a namespace whose policy caps the summary at `max_summary_chars`
+/// while the defensive limit keeps its looser default of 1200.
+fn ns_with_policy_summary_cap(max_summary_chars: u32) -> ContextNamespace {
+    let mut cfg = config();
+    cfg.policy.max_summary_chars = max_summary_chars;
+    let mut ns = ContextNamespace::new(cfg).expect("valid config");
+    append_records(&mut ns, &["alpha", "beta", "gamma"]);
+    ns
+}
+
+fn prepare_first_two(ns: &mut ContextNamespace) -> context_namespace::PreparedSummary {
+    let view = ns.render().expect("render");
+    ns.prepare_record_summary(
+        RecordSelection {
+            render_id: view.render_id,
+            start_index: 0,
+            end_index: 2,
+        },
+        make_label("batch"),
+    )
+    .expect("prepare")
+}
+
+#[test]
+fn commit_record_summary_at_policy_cap_is_accepted() {
+    let mut ns = ns_with_policy_summary_cap(2);
+    let prepared = prepare_first_two(&mut ns);
+
+    // The callback must see the effective cap, not the looser defensive limit.
+    assert_eq!(prepared.input.max_summary_chars, 2);
+
+    ns.commit_summary(
+        prepared,
+        SummaryResult {
+            summary: "fo".to_string(),
+            gloss: "g".to_string(),
+        },
+    )
+    .expect("summary exactly at the policy cap commits");
+    assert_eq!(ns.stats().nodes, 1);
+}
+
+#[test]
+fn commit_record_summary_above_policy_cap_is_rejected() {
+    let mut ns = ns_with_policy_summary_cap(2);
+    let prepared = prepare_first_two(&mut ns);
+
+    let err = ns
+        .commit_summary(
+            prepared,
+            SummaryResult {
+                summary: "four".to_string(),
+                gloss: "g".to_string(),
+            },
+        )
+        .expect_err("summary above the policy cap must be rejected");
+    assert!(
+        matches!(&err, context_namespace::NamespaceError::InvalidSelection(msg) if msg.contains("exceeds max 2")),
+        "unexpected error: {err}"
+    );
+    assert_eq!(ns.stats().nodes, 0);
+    assert_eq!(ns.stats().records, 3);
+}
+
+// ---------------------------------------------------------------------------
+// Commit: max_children_per_node bounds the reparented children
+// ---------------------------------------------------------------------------
+
+fn ns_with_child_limit(max_children: u32) -> ContextNamespace {
+    let mut cfg = config();
+    cfg.limits.max_children_per_node = NonZeroU32::new(max_children).unwrap();
+    let mut ns = ContextNamespace::new(cfg).expect("valid config");
+    append_records(&mut ns, &["alpha", "beta", "gamma"]);
+    ns
+}
+
+/// Summarizes exactly one record into a node and returns its ID.
+fn commit_single_record(ns: &mut ContextNamespace, index: u32, label: &str) -> NodeId {
+    let view = ns.render().expect("render");
+    let prepared = ns
+        .prepare_record_summary(
+            RecordSelection {
+                render_id: view.render_id,
+                start_index: index,
+                end_index: index + 1,
+            },
+            make_label(label),
+        )
+        .expect("prepare record");
+    ns.commit_summary(
+        prepared,
+        SummaryResult {
+            summary: format!("summary {label}"),
+            gloss: "g".to_string(),
+        },
+    )
+    .expect("commit record")
+    .new_node_id
+}
+
+/// Summarizes a char range of one visible record and returns the node ID.
+fn commit_text_slice(
+    ns: &mut ContextNamespace,
+    index: u32,
+    start_char: u32,
+    end_char: u32,
+    label: &str,
+) -> NodeId {
+    let view = ns.render().expect("render");
+    let prepared = ns
+        .prepare_text_summary(
+            TextSelection {
+                record: RecordLocator::Visible {
+                    render_id: view.render_id,
+                    index,
+                },
+                start_char,
+                end_char,
+            },
+            make_label(label),
+        )
+        .expect("prepare text");
+    ns.commit_summary(
+        prepared,
+        SummaryResult {
+            summary: format!("summary {label}"),
+            gloss: "g".to_string(),
+        },
+    )
+    .expect("commit text")
+    .new_node_id
+}
+
+#[test]
+fn commit_record_summary_rejects_too_many_reparented_children() {
+    let mut ns = ns_with_child_limit(1);
+    commit_single_record(&mut ns, 0, "a");
+    commit_single_record(&mut ns, 1, "b");
+
+    let view = ns.render().expect("render");
+    let prepared = ns
+        .prepare_record_summary(
+            RecordSelection {
+                render_id: view.render_id,
+                start_index: 0,
+                end_index: 2,
+            },
+            make_label("parent"),
+        )
+        .expect("prepare parent");
+
+    let err = ns
+        .commit_summary(
+            prepared,
+            SummaryResult {
+                summary: "parent summary".to_string(),
+                gloss: "g".to_string(),
+            },
+        )
+        .expect_err("two children exceed the limit of one");
+    assert!(
+        matches!(&err, NamespaceError::LimitExceeded(msg) if msg.contains("2 child nodes, max 1")),
+        "unexpected error: {err}"
+    );
+
+    // Nothing was modified.
+    assert_eq!(ns.stats().nodes, 2);
+    assert_eq!(ns.stats().records, 3);
+    assert!(
+        ns.resolve_path(
+            &NamespacePath::root()
+                .child(
+                    &make_label("parent"),
+                    &DefensiveLimits::portfolio_defaults()
+                )
+                .expect("path")
+        )
+        .is_err()
+    );
+    assert!(ns.validate().is_ok());
+}
+
+#[test]
+fn commit_text_slice_rejects_too_many_reparented_children() {
+    let mut ns = ns_with_child_limit(1);
+    commit_single_record(&mut ns, 0, "a");
+    commit_single_record(&mut ns, 1, "b");
+
+    // Splice two refs into the remaining text record:
+    // "gamma" -> [Ref(c), "amma"] -> [Ref(c), "a", Ref(d), "mma"].
+    commit_text_slice(&mut ns, 2, 0, 1, "c");
+    commit_text_slice(&mut ns, 2, 1, 2, "d");
+
+    // A slice covering both refs would reparent two children.
+    let view = ns.render().expect("render");
+    let prepared = ns
+        .prepare_text_summary(
+            TextSelection {
+                record: RecordLocator::Visible {
+                    render_id: view.render_id,
+                    index: 2,
+                },
+                start_char: 0,
+                end_char: 2,
+            },
+            make_label("parent"),
+        )
+        .expect("prepare parent");
+
+    let err = ns
+        .commit_summary(
+            prepared,
+            SummaryResult {
+                summary: "parent summary".to_string(),
+                gloss: "g".to_string(),
+            },
+        )
+        .expect_err("two children exceed the limit of one");
+    assert!(
+        matches!(&err, NamespaceError::LimitExceeded(msg) if msg.contains("2 child nodes, max 1")),
+        "unexpected error: {err}"
+    );
+
+    assert_eq!(ns.stats().nodes, 4);
+    assert!(ns.validate().is_ok());
 }
 
 // ---------------------------------------------------------------------------

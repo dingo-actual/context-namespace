@@ -1,6 +1,6 @@
 use context_namespace::{
-    ContextNamespace, DefensiveLimits, NamespaceConfig, NewRecord, NodeLabel, RestoreOptions,
-    SnapshotBytes,
+    ContextNamespace, DefensiveLimits, NamespaceConfig, NamespaceError, NewRecord, NodeLabel,
+    RestoreOptions, SnapshotBytes,
 };
 
 use indexmap::IndexMap;
@@ -330,4 +330,39 @@ fn snapshot_includes_content_hash() {
     let snapshot = ns.snapshot().expect("snapshot");
     let json: serde_json::Value = serde_json::from_slice(snapshot.data()).expect("valid json");
     assert!(json.get("content_sha256").is_some());
+}
+
+// ---------------------------------------------------------------------------
+// Content-hash verification on restore
+// ---------------------------------------------------------------------------
+
+#[test]
+fn restore_accepts_untouched_snapshot() {
+    let mut ns = make_ns_with_records(2);
+    summarize_records(&mut ns, 0, 2, "batch");
+    let snapshot = ns.snapshot().expect("snapshot");
+
+    let (restored, receipt) = ContextNamespace::restore(snapshot.data(), RestoreOptions::default())
+        .expect("untouched snapshot restores");
+    assert_eq!(receipt.records, 1);
+    assert_eq!(restored.stats().nodes, 1);
+}
+
+#[test]
+fn restore_rejects_modified_content_with_stale_hash() {
+    let mut ns = make_ns_with_records(1);
+    let snapshot = ns.snapshot().expect("snapshot");
+
+    let mut json: serde_json::Value = serde_json::from_slice(snapshot.data()).expect("valid json");
+    json["records"][0]["render"][0]["Text"] = serde_json::json!("after");
+    let tampered = serde_json::to_vec(&json).expect("encode");
+
+    let err = match ContextNamespace::restore(&tampered, RestoreOptions::default()) {
+        Ok(_) => panic!("tampered snapshot must be rejected"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(&err, NamespaceError::Invariant(msg) if msg.contains("content hash mismatch")),
+        "unexpected error: {err}"
+    );
 }

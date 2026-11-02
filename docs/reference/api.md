@@ -357,8 +357,8 @@ Removes a pending request without mutating canonical state.
 | `request_id` | `RequestId` | The request ID associated with this summary |
 | `source` | `String` | The rendered source text extracted from canonical collapsed state |
 | `children` | `Vec<ChildDescriptor>` | Immediate child nodes referenced by the selection |
-| `max_summary_chars` | `u32` | Policy-enforced maximum summary length |
-| `max_gloss_chars` | `u32` | Policy-enforced maximum gloss length |
+| `max_summary_chars` | `u32` | Effective maximum summary length: the tighter of the policy and defensive limits |
+| `max_gloss_chars` | `u32` | Effective maximum gloss length: the tighter of the policy and defensive limits |
 
 ### `ChildDescriptor`
 
@@ -691,8 +691,8 @@ empty `render_field`, `trigger_tokens < target_tokens`,
 | `target_tokens` | `u32` | 16,000 | Target token count for the summarized range |
 | `preserve_prefix_records` | `u32` | 1 | Prefix records always preserved |
 | `preserve_recent_records` | `u32` | 8 | Most-recent records always preserved |
-| `max_summary_chars` | `u32` | 1,200 | Maximum summary characters |
-| `max_gloss_chars` | `u32` | 160 | Maximum gloss characters |
+| `max_summary_chars` | `u32` | 1,200 | Maximum summary characters (effective cap is the tighter of this and the defensive limit) |
+| `max_gloss_chars` | `u32` | 160 | Maximum gloss characters (effective cap is the tighter of this and the defensive limit) |
 | `default_expansion_ttl` | `NonZeroU32` | 2 | Default expansion TTL in renders |
 | `max_expansion_ttl` | `NonZeroU32` | 4 | Maximum expansion TTL in renders |
 

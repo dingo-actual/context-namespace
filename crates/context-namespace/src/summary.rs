@@ -69,8 +69,8 @@ pub struct ChildDescriptor {
 ///
 /// `source` is the rendered text extracted from canonical collapsed state.
 /// `children` describes immediate child nodes whose references appear in the
-/// source. `max_summary_chars` and `max_gloss_chars` are policy-enforced
-/// limits the summarizer must respect.
+/// source. `max_summary_chars` and `max_gloss_chars` are the effective caps the
+/// summarizer must respect: the tighter of the policy and defensive limits.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SummaryInput {
     /// The request ID associated with this summary preparation.
@@ -79,9 +79,9 @@ pub struct SummaryInput {
     pub source: String,
     /// Descriptors for immediate child nodes whose references appear in the source.
     pub children: Vec<ChildDescriptor>,
-    /// Policy-enforced maximum character length for the summary.
+    /// Effective maximum character length for the summary.
     pub max_summary_chars: u32,
-    /// Policy-enforced maximum character length for the gloss.
+    /// Effective maximum character length for the gloss.
     pub max_gloss_chars: u32,
 }
 
@@ -95,13 +95,10 @@ pub struct SummaryResult {
 }
 
 impl SummaryResult {
-    /// Validates the result against policy-enforced length limits.
-    pub(crate) fn validate(
-        &self,
-        limits: &crate::config::DefensiveLimits,
-    ) -> Result<(), NamespaceError> {
-        let max_summary = limits.max_summary_chars.get() as usize;
-        let max_gloss = limits.max_gloss_chars.get() as usize;
+    /// Validates the result against the effective summary and gloss caps.
+    pub(crate) fn validate(&self, max_summary: u32, max_gloss: u32) -> Result<(), NamespaceError> {
+        let max_summary = max_summary as usize;
+        let max_gloss = max_gloss as usize;
         if self.summary.chars().count() > max_summary {
             return Err(NamespaceError::InvalidSelection(format!(
                 "summary length {} exceeds max {}",

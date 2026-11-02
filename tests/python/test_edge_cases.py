@@ -8,6 +8,8 @@ verification.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from conftest import (
     append_records,
@@ -19,6 +21,7 @@ from context_namespace import (
     ContextNamespace,
     ContextNamespaceError,
     InvalidSelectionError,
+    InvariantViolationError,
     NamespaceConfig,
     UnknownPathError,
 )
@@ -331,6 +334,25 @@ class TestRestoreWithConfig:
         snap = ns.snapshot()
         restored = ContextNamespace.restore(snap, config=NamespaceConfig())
         assert restored.stats().records == 1
+
+
+class TestRestoreContentHash:
+    """Test that restore verifies the snapshot content hash."""
+
+    def test_untouched_snapshot_restores(self):
+        ns = ContextNamespace(config=NamespaceConfig())
+        ns.append(make_record("before"))
+        restored = ContextNamespace.restore(ns.snapshot())
+        assert "before" in restored.render().json
+
+    def test_modified_record_content_is_rejected(self):
+        ns = ContextNamespace(config=NamespaceConfig())
+        ns.append(make_record("before"))
+        envelope = json.loads(ns.snapshot())
+        envelope["records"][0]["render"][0]["Text"] = "after"
+
+        with pytest.raises(InvariantViolationError, match="content hash mismatch"):
+            ContextNamespace.restore(json.dumps(envelope).encode())
 
 
 class TestEventQueueOverflow:

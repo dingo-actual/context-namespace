@@ -269,6 +269,22 @@ impl crate::namespace::ContextNamespace {
             }
         }
 
+        // Verify the content hash before trusting any decoded state.
+        let computed = CanonicalContent {
+            namespace_version: envelope.namespace_version,
+            records: &envelope.records,
+            nodes: &envelope.nodes,
+            aliases: &envelope.aliases,
+            active_expansions: &envelope.active_expansions,
+        }
+        .content_hash();
+        if computed != envelope.content_sha256 {
+            return Err(NamespaceError::Invariant(format!(
+                "snapshot content hash mismatch: envelope {}, computed {}",
+                envelope.content_sha256, computed
+            )));
+        }
+
         // Validate unique record IDs.
         let mut seen_record_ids = std::collections::HashSet::new();
         for record in &envelope.records {

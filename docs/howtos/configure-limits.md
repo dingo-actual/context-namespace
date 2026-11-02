@@ -44,7 +44,7 @@ let limits = DefensiveLimits {
 | `max_summary_chars` | 1,200 | `commit_summary` |
 | `max_gloss_chars` | 160 | `commit_summary` |
 | `max_tree_depth` | 32 | path construction |
-| `max_children_per_node` | 64 | not enforced (reserved) |
+| `max_children_per_node` | 64 | `commit_summary` |
 | `max_active_expansions` | 64 | `expand` |
 | `max_pending_requests` | 16 | `prepare_*_summary` |
 | `max_aliases_per_node` | 16 | not enforced (reserved) |
@@ -52,9 +52,12 @@ let limits = DefensiveLimits {
 | `max_label_length` | 128 | `NodeLabel::new` |
 | `max_event_queue` | 10,000 | event push |
 
-Three limits (`max_source_bytes`, `max_children_per_node`, and
-`max_aliases_per_node`) are declared and serialized with the
-configuration but are not yet enforced by any operation.
+Two limits (`max_source_bytes` and `max_aliases_per_node`) are declared and
+serialized with the configuration but are not yet enforced by any operation.
+
+`max_summary_chars` and `max_gloss_chars` are upper bounds only: the cap sent
+to the summarizer and enforced at commit is the tighter of the defensive limit
+and the corresponding `PolicyConfig` value.
 
 ## Verification
 

@@ -896,6 +896,21 @@ impl ContextNamespace {
     // Transaction: prepare / commit / cancel
     // -----------------------------------------------------------------------
 
+    /// Effective character caps for summaries and glosses: the tighter of the
+    /// policy and defensive limits.
+    fn effective_summary_caps(&self) -> (u32, u32) {
+        (
+            self.config
+                .policy
+                .max_summary_chars
+                .min(self.config.limits.max_summary_chars.get()),
+            self.config
+                .policy
+                .max_gloss_chars
+                .min(self.config.limits.max_gloss_chars.get()),
+        )
+    }
+
     /// Prepares a record-range summary.
     ///
     /// Validates the selection against the current canonical state,
@@ -944,6 +959,20 @@ impl ContextNamespace {
             })
             .collect::<Result<_, _>>()?;
 
+        self.prepare_record_range(canonical_indices, label)
+    }
+
+    /// Prepares a record-range summary over canonical record indices that the
+    /// caller has already validated against the current state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NamespaceError`] if a defensive limit is exceeded.
+    fn prepare_record_range(
+        &mut self,
+        canonical_indices: Vec<usize>,
+        label: NodeLabel,
+    ) -> Result<PreparedSummary, NamespaceError> {
         // Extract source text from the selected canonical records.
         let mut source_text = String::new();
         let mut source_record_ids = Vec::new();
@@ -1018,12 +1047,13 @@ impl ContextNamespace {
         let request_id = self.new_request_id();
         let version = self.version;
 
+        let (max_summary_chars, max_gloss_chars) = self.effective_summary_caps();
         let input = SummaryInput {
             request_id,
             source: source_text,
             children,
-            max_summary_chars: self.config.limits.max_summary_chars.get(),
-            max_gloss_chars: self.config.limits.max_gloss_chars.get(),
+            max_summary_chars,
+            max_gloss_chars,
         };
 
         let token = TransactionToken::new(request_id, source_hash.clone(), version);
@@ -1198,12 +1228,13 @@ impl ContextNamespace {
         let request_id = self.new_request_id();
         let version = self.version;
 
+        let (max_summary_chars, max_gloss_chars) = self.effective_summary_caps();
         let input = SummaryInput {
             request_id,
             source: source_text,
             children,
-            max_summary_chars: self.config.limits.max_summary_chars.get(),
-            max_gloss_chars: self.config.limits.max_gloss_chars.get(),
+            max_summary_chars,
+            max_gloss_chars,
         };
 
         let token = TransactionToken::new(request_id, source_hash.clone(), version);
@@ -1281,8 +1312,9 @@ impl ContextNamespace {
             return Err(NamespaceError::StaleSummary(request_id.to_string()));
         }
 
-        // Validate summary result.
-        result.validate(&self.config.limits)?;
+        // Validate summary result against the effective character caps.
+        let (max_summary_chars, max_gloss_chars) = self.effective_summary_caps();
+        result.validate(max_summary_chars, max_gloss_chars)?;
 
         // Build the mutation plan.
         let plan = self.build_mutation_plan(pending, &result)?;
@@ -1471,7 +1503,8 @@ impl ContextNamespace {
     /// # Errors
     ///
     /// Returns [`NamespaceError`] if the estimates do not match the current
-    /// state (wrong record count, stale digest, or extra/missing estimates).
+    /// state (wrong record count, stale digest, duplicate estimate, or
+    /// extra/missing estimates).
     pub fn plan_maintenance(
         &mut self,
         input: MaintenanceInput,
@@ -1535,20 +1568,13 @@ impl ContextNamespace {
             });
         }
 
-        // Build a RecordSelection using a fresh render so we have a valid
-        // render_id for prepare_record_summary.
-        let view = self.render()?;
-        let selection = RecordSelection {
-            render_id: view.render_id,
-            start_index: eligible_start as u32,
-            end_index: selected_end as u32,
-        };
-
-        // Use a deterministic label based on the namespace version.
+        // Prepare directly from the canonical eligible range: rendering here
+        // would consume an expansion's final TTL before the caller sees it.
         let label = NodeLabel::new(format!("maintenance-{}", self.version), &self.config.limits)
             .map_err(|e| NamespaceError::InvalidSelection(e.to_string()))?;
 
-        let prepared = self.prepare_record_summary(selection, label)?;
+        let canonical_indices: Vec<usize> = (eligible_start..selected_end).collect();
+        let prepared = self.prepare_record_range(canonical_indices, label)?;
 
         Ok(MaintenanceDecision::Summarize(prepared))
     }
@@ -1578,6 +1604,7 @@ impl ContextNamespace {
         }
 
         let mut estimates = vec![0u32; self.records.len()];
+        let mut covered = vec![false; self.records.len()];
 
         for estimate in &input.records {
             let idx = *id_to_index.get(&estimate.record_id).ok_or_else(|| {
@@ -1586,6 +1613,13 @@ impl ContextNamespace {
                     estimate.record_id
                 ))
             })?;
+
+            if covered[idx] {
+                return Err(NamespaceError::PolicyViolation(format!(
+                    "duplicate estimate for record {}",
+                    estimate.record_id
+                )));
+            }
 
             // Verify the digest matches the current render fragment.
             let record = &self.records[idx];
@@ -1646,6 +1680,17 @@ impl ContextNamespace {
             }
 
             estimates[idx] = estimate.estimated_tokens;
+            covered[idx] = true;
+        }
+
+        // Every current record must be covered exactly once. Presence is
+        // tracked separately from the token count so that a genuine
+        // zero-token estimate is not mistaken for an omitted record.
+        if let Some(missing) = covered.iter().position(|c| !c) {
+            return Err(NamespaceError::PolicyViolation(format!(
+                "missing estimate for record {}",
+                self.records[missing].id()
+            )));
         }
 
         Ok(estimates)
@@ -1709,6 +1754,37 @@ impl ContextNamespace {
         }
     }
 
+    /// Collects the distinct live nodes that a commit would reparent under the
+    /// new node, rejecting the commit if that would exceed
+    /// `max_children_per_node`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NamespaceError::LimitExceeded`] if too many children would be
+    /// reparented.
+    fn collect_reparented_children(
+        &self,
+        child_node_ids: &[NodeId],
+    ) -> Result<Vec<NodeKey>, NamespaceError> {
+        let mut keys: Vec<NodeKey> = Vec::new();
+        for nid in child_node_ids {
+            if let Some(key) = self.node_by_id.get(nid) {
+                if !keys.contains(key) {
+                    keys.push(*key);
+                }
+            }
+        }
+
+        let max = self.config.limits.max_children_per_node.get() as usize;
+        if keys.len() > max {
+            return Err(NamespaceError::LimitExceeded(format!(
+                "commit would create {} child nodes, max {max}",
+                keys.len()
+            )));
+        }
+        Ok(keys)
+    }
+
     fn build_record_range_plan(
         &self,
         pending: &PendingSummary,
@@ -1749,23 +1825,13 @@ impl ContextNamespace {
         carrier.set_render(vec![Segment::Ref(new_node_id)]);
 
         // Build alias additions for reparented children.
-        let alias_additions: Vec<(NamespacePath, NodeId)> = pending
-            .child_node_ids
+        let reparent = self.collect_reparented_children(&pending.child_node_ids)?;
+        let alias_additions: Vec<(NamespacePath, NodeId)> = reparent
             .iter()
-            .filter_map(|nid| {
-                self.node_by_id.get(nid).and_then(|key| {
-                    self.current_path
-                        .get(*key)
-                        .map(|old_path| (old_path.clone(), *nid))
-                })
+            .filter_map(|key| {
+                let old_path = self.current_path.get(*key)?;
+                Some((old_path.clone(), self.nodes.get(*key)?.id()))
             })
-            .collect();
-
-        // Reparent keys.
-        let reparent: Vec<NodeKey> = pending
-            .child_node_ids
-            .iter()
-            .filter_map(|nid| self.node_by_id.get(nid).copied())
             .collect();
 
         // Carrier position: the first removed record's position.
@@ -1914,18 +1980,12 @@ impl ContextNamespace {
         };
 
         // Reparent keys and alias additions for contained child nodes.
-        let reparent: Vec<NodeKey> = child_node_ids
+        let reparent = self.collect_reparented_children(&child_node_ids)?;
+        let alias_additions: Vec<(NamespacePath, NodeId)> = reparent
             .iter()
-            .filter_map(|nid| self.node_by_id.get(nid).copied())
-            .collect();
-        let alias_additions: Vec<(NamespacePath, NodeId)> = child_node_ids
-            .iter()
-            .filter_map(|nid| {
-                self.node_by_id.get(nid).and_then(|key| {
-                    self.current_path
-                        .get(*key)
-                        .map(|old_path| (old_path.clone(), *nid))
-                })
+            .filter_map(|key| {
+                let old_path = self.current_path.get(*key)?;
+                Some((old_path.clone(), self.nodes.get(*key)?.id()))
             })
             .collect();
 
