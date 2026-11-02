@@ -18,6 +18,7 @@ from conftest import (
 from context_namespace import (
     ContextNamespace,
     ContextNamespaceError,
+    DefensiveLimits,
     InvalidRecordError,
     InvalidSelectionError,
     InvariantViolationError,
@@ -26,6 +27,7 @@ from context_namespace import (
     ReservedKeyCollisionError,
     SnapshotVersionError,
     StaleRenderError,
+    SummaryResult,
     UnknownPathError,
 )
 
@@ -178,3 +180,79 @@ class TestSummarizerErrorCancels:
                 summarizer=FailingSummarizer(ValueError("bad model")),
             )
         assert ns.stats().pending_requests == 0
+
+
+class FixedSummarizer:
+    """A summarizer that returns a fixed object, valid or not."""
+
+    def __init__(self, result: object) -> None:
+        self.result = result
+
+    async def summarize(self, request) -> object:
+        return self.result
+
+
+class TestFailedCommitReleasesPending:
+    """Verify a rejected commit does not leave a pending request behind."""
+
+    @staticmethod
+    def _ns() -> ContextNamespace:
+        limits = DefensiveLimits(max_pending_requests=1, max_summary_chars=4)
+        return append_records(ContextNamespace(config=NamespaceConfig(limits=limits)), 2)
+
+    @staticmethod
+    def _assert_valid_retry_succeeds(ns: ContextNamespace) -> None:
+        assert ns.stats().pending_requests == 0
+        view = ns.render()
+        receipt = summarize_records_sync(
+            ns,
+            render_id=view.render_id,
+            start_index=0,
+            end_index=2,
+            label="batch",
+            summarizer=FixedSummarizer(SummaryResult(summary="ok", gloss="g")),
+        )
+        assert receipt.node_id
+        assert ns.stats().pending_requests == 0
+
+    def test_invalid_result_releases_pending_and_retry_succeeds(self):
+        ns = self._ns()
+        view = ns.render()
+        with pytest.raises(InvalidSelectionError):
+            summarize_records_sync(
+                ns,
+                render_id=view.render_id,
+                start_index=0,
+                end_index=2,
+                label="batch",
+                summarizer=FixedSummarizer(SummaryResult(summary="12345", gloss="g")),
+            )
+        self._assert_valid_retry_succeeds(ns)
+
+    def test_non_string_result_releases_pending_and_retry_succeeds(self):
+        ns = self._ns()
+        view = ns.render()
+        with pytest.raises(TypeError):
+            summarize_records_sync(
+                ns,
+                render_id=view.render_id,
+                start_index=0,
+                end_index=2,
+                label="batch",
+                summarizer=FixedSummarizer(SummaryResult(summary=123, gloss="g")),
+            )
+        self._assert_valid_retry_succeeds(ns)
+
+    def test_unreadable_result_releases_pending_and_retry_succeeds(self):
+        ns = self._ns()
+        view = ns.render()
+        with pytest.raises(AttributeError):
+            summarize_records_sync(
+                ns,
+                render_id=view.render_id,
+                start_index=0,
+                end_index=2,
+                label="batch",
+                summarizer=FixedSummarizer(object()),
+            )
+        self._assert_valid_retry_succeeds(ns)

@@ -54,7 +54,7 @@ from ._native import (
 from ._native import (
     UnknownPathError as _NativeUnknownPathError,
 )
-from ._native import _NativeNamespace
+from ._native import _NativeNamespace, _PyPreparedSummary
 from .config import NamespaceConfig
 from .errors import (
     ContextNamespaceError,
@@ -83,6 +83,7 @@ from .models import (
     StructuralStats,
     SummaryInput,
     SummaryReceipt,
+    SummaryResult,
 )
 from .protocols import Summarizer
 
@@ -294,13 +295,7 @@ class ContextNamespace:
         except BaseException:
             self._native._cancel(prepared)
             raise
-        r = self._native._commit_summary(prepared, result.summary, result.gloss)
-        return SummaryReceipt(
-            node_id=r.node_id,
-            carrier_record_id=r.carrier_record_id,
-            replaced_record_ids=tuple(r.replaced_record_ids),
-            render_id=r.render_id,
-        )
+        return self._commit_prepared(prepared, result)
 
     @_map_native_errors
     async def summarize_text(
@@ -345,13 +340,7 @@ class ContextNamespace:
         except BaseException:
             self._native._cancel(prepared)
             raise
-        r = self._native._commit_summary(prepared, result.summary, result.gloss)
-        return SummaryReceipt(
-            node_id=r.node_id,
-            carrier_record_id=r.carrier_record_id,
-            replaced_record_ids=tuple(r.replaced_record_ids),
-            render_id=r.render_id,
-        )
+        return self._commit_prepared(prepared, result)
 
     @_map_native_errors
     async def maintain(
@@ -399,14 +388,28 @@ class ContextNamespace:
         except BaseException:
             self._native._cancel(prepared)
             raise
-        r = self._native._commit_summary(prepared, result.summary, result.gloss)
-        receipt = SummaryReceipt(
+        receipt = self._commit_prepared(prepared, result)
+        return MaintenanceReceipt.summarized(receipt)
+
+    def _commit_prepared(
+        self, prepared: _PyPreparedSummary, result: SummaryResult
+    ) -> SummaryReceipt:
+        """Commits a summarizer result and releases the pending request on any failure."""
+        try:
+            summary, gloss = result.summary, result.gloss
+            r = self._native._commit_summary(prepared, summary, gloss)
+        except BaseException:
+            try:
+                self._native._cancel(prepared)
+            except Exception:
+                pass
+            raise
+        return SummaryReceipt(
             node_id=r.node_id,
             carrier_record_id=r.carrier_record_id,
             replaced_record_ids=tuple(r.replaced_record_ids),
             render_id=r.render_id,
         )
-        return MaintenanceReceipt.summarized(receipt)
 
     @_map_native_errors
     def expand(self, path: str, *, ttl_renders: int = 2) -> ExpansionReceipt:

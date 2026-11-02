@@ -1240,7 +1240,8 @@ impl ContextNamespace {
     /// # Errors
     ///
     /// Returns [`NamespaceError`] if the request is stale, the result is
-    /// invalid, or a path collision occurs.
+    /// invalid, or a path collision occurs. After the request is
+    /// authenticated, every outcome releases the pending request.
     pub fn commit_summary(
         &mut self,
         prepared: PreparedSummary,
@@ -1249,16 +1250,31 @@ impl ContextNamespace {
         let request_id = prepared.request_id;
         let token = prepared.token();
 
-        // Retrieve pending state.
+        // An unauthenticated token must not release the live request.
+        let authenticated = self.pending.get(&request_id).is_some_and(|pending| {
+            token.verify(request_id, &pending.source_hash, pending.created_version)
+        });
+        if !authenticated {
+            return Err(NamespaceError::StaleSummary(request_id.to_string()));
+        }
+
+        // Every later outcome is terminal for this request: release it even
+        // when the commit is rejected, so one failure cannot block a retry
+        // under a pending-request limit.
+        let outcome = self.finish_commit(request_id, result);
+        self.pending.remove(&request_id);
+        outcome
+    }
+
+    fn finish_commit(
+        &mut self,
+        request_id: RequestId,
+        result: SummaryResult,
+    ) -> Result<SummaryReceipt, NamespaceError> {
         let pending = self
             .pending
             .get(&request_id)
             .ok_or_else(|| NamespaceError::StaleSummary(request_id.to_string()))?;
-
-        // Verify transaction token.
-        if !token.verify(request_id, &pending.source_hash, pending.created_version) {
-            return Err(NamespaceError::StaleSummary(request_id.to_string()));
-        }
 
         // Check version hasn't changed.
         if pending.created_version != self.version {
@@ -1273,9 +1289,6 @@ impl ContextNamespace {
 
         // Apply the plan.
         self.apply_mutation_plan(&plan);
-
-        // Remove pending request.
-        self.pending.remove(&request_id);
 
         // Bump version.
         self.version += 1;

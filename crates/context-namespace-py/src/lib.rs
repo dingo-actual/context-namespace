@@ -569,15 +569,24 @@ impl PyNamespace {
         summary: &Bound<'_, PyAny>,
         gloss: &Bound<'_, PyAny>,
     ) -> PyResult<PySummaryReceipt> {
-        let summary_str: String = summary.extract()?;
-        let gloss_str: String = gloss.extract()?;
         let inner = prepared
             .inner
             .take()
             .ok_or_else(|| StaleSummaryError::new_err("prepared summary already consumed"))?;
-        let result = SummaryResult {
-            summary: summary_str,
-            gloss: gloss_str,
+        let unpack = || -> PyResult<SummaryResult> {
+            Ok(SummaryResult {
+                summary: summary.extract()?,
+                gloss: gloss.extract()?,
+            })
+        };
+        let result = match unpack() {
+            Ok(result) => result,
+            Err(err) => {
+                // Release the handle's pending request: a conversion failure
+                // must not block later prepares.
+                let _ = self.inner.cancel_summary(inner.request_id);
+                return Err(err);
+            }
         };
         let receipt = self
             .inner

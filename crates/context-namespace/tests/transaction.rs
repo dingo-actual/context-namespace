@@ -387,6 +387,194 @@ fn commit_record_summary_result_too_long_returns_error() {
 }
 
 // ---------------------------------------------------------------------------
+// Rejected commits release the pending request
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rejected_commit_releases_pending_request_and_valid_retry_succeeds() {
+    let mut cfg = config();
+    cfg.limits.max_pending_requests = NonZeroU32::new(1).unwrap();
+    cfg.limits.max_summary_chars = NonZeroU32::new(4).unwrap();
+    let mut ns = ContextNamespace::new(cfg).expect("valid config");
+    append_records(&mut ns, &["alpha", "beta", "gamma"]);
+
+    let view = ns.render().expect("render");
+    let prepared = ns
+        .prepare_record_summary(
+            RecordSelection {
+                render_id: view.render_id,
+                start_index: 0,
+                end_index: 2,
+            },
+            make_label("batch"),
+        )
+        .expect("prepare");
+
+    // The summary exceeds max_summary_chars, so the commit is rejected.
+    let err = ns.commit_summary(
+        prepared,
+        SummaryResult {
+            summary: "12345".to_string(),
+            gloss: "g".to_string(),
+        },
+    );
+    assert!(err.is_err());
+    assert_eq!(ns.stats().pending_requests, 0);
+
+    // The single pending slot is free again, so a valid retry succeeds.
+    let view = ns.render().expect("render");
+    let prepared = ns
+        .prepare_record_summary(
+            RecordSelection {
+                render_id: view.render_id,
+                start_index: 0,
+                end_index: 2,
+            },
+            make_label("batch"),
+        )
+        .expect("retry prepare");
+    ns.commit_summary(
+        prepared,
+        SummaryResult {
+            summary: "ok".to_string(),
+            gloss: "g".to_string(),
+        },
+    )
+    .expect("retry commit");
+    assert_eq!(ns.stats().nodes, 1);
+    assert_eq!(ns.stats().pending_requests, 0);
+    ns.validate().expect("invariants");
+}
+
+#[test]
+fn stale_commit_releases_pending_request_and_valid_retry_succeeds() {
+    let mut cfg = config();
+    cfg.limits.max_pending_requests = NonZeroU32::new(1).unwrap();
+    let mut ns = ContextNamespace::new(cfg).expect("valid config");
+    append_records(&mut ns, &["alpha", "beta", "gamma"]);
+
+    let view = ns.render().expect("render");
+    let prepared = ns
+        .prepare_record_summary(
+            RecordSelection {
+                render_id: view.render_id,
+                start_index: 0,
+                end_index: 2,
+            },
+            make_label("batch"),
+        )
+        .expect("prepare");
+
+    // An append while the request is pending makes the commit stale.
+    ns.append(make_record("delta")).expect("append");
+    let err = ns.commit_summary(
+        prepared,
+        SummaryResult {
+            summary: "ok".to_string(),
+            gloss: "g".to_string(),
+        },
+    );
+    assert!(err.is_err());
+    assert_eq!(ns.stats().pending_requests, 0);
+
+    let view = ns.render().expect("render");
+    let prepared = ns
+        .prepare_record_summary(
+            RecordSelection {
+                render_id: view.render_id,
+                start_index: 0,
+                end_index: 2,
+            },
+            make_label("batch"),
+        )
+        .expect("retry prepare");
+    ns.commit_summary(
+        prepared,
+        SummaryResult {
+            summary: "ok".to_string(),
+            gloss: "g".to_string(),
+        },
+    )
+    .expect("retry commit");
+    assert_eq!(ns.stats().nodes, 1);
+    assert_eq!(ns.stats().pending_requests, 0);
+    ns.validate().expect("invariants");
+}
+
+#[test]
+fn failed_mutation_planning_releases_pending_request() {
+    let mut cfg = config();
+    cfg.limits.max_pending_requests = NonZeroU32::new(1).unwrap();
+    let mut ns = ContextNamespace::new(cfg).expect("valid config");
+    append_records(&mut ns, &["alpha", "beta", "gamma", "delta"]);
+
+    // Occupy /batch.
+    let view = ns.render().expect("render");
+    let prepared = ns
+        .prepare_record_summary(
+            RecordSelection {
+                render_id: view.render_id,
+                start_index: 0,
+                end_index: 1,
+            },
+            make_label("batch"),
+        )
+        .expect("prepare");
+    ns.commit_summary(
+        prepared,
+        SummaryResult {
+            summary: "ok".to_string(),
+            gloss: "g".to_string(),
+        },
+    )
+    .expect("commit");
+
+    // The same label collides during mutation planning.
+    let view = ns.render().expect("render");
+    let prepared = ns
+        .prepare_record_summary(
+            RecordSelection {
+                render_id: view.render_id,
+                start_index: 1,
+                end_index: 3,
+            },
+            make_label("batch"),
+        )
+        .expect("prepare colliding");
+    let err = ns.commit_summary(
+        prepared,
+        SummaryResult {
+            summary: "ok".to_string(),
+            gloss: "g".to_string(),
+        },
+    );
+    assert!(err.is_err());
+    assert_eq!(ns.stats().pending_requests, 0);
+
+    // The freed slot allows a differently labelled summary.
+    let prepared = ns
+        .prepare_record_summary(
+            RecordSelection {
+                render_id: view.render_id,
+                start_index: 1,
+                end_index: 3,
+            },
+            make_label("other"),
+        )
+        .expect("retry prepare");
+    ns.commit_summary(
+        prepared,
+        SummaryResult {
+            summary: "ok".to_string(),
+            gloss: "g".to_string(),
+        },
+    )
+    .expect("retry commit");
+    assert_eq!(ns.stats().pending_requests, 0);
+    ns.validate().expect("invariants");
+}
+
+// ---------------------------------------------------------------------------
 // Prepare: pending limit exceeded
 // ---------------------------------------------------------------------------
 
