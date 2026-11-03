@@ -14,10 +14,6 @@ maintenance policy can trigger automatic summarization based on harness-supplied
 The library is written in Rust (1.85+, Edition 2024) with optional Python bindings via PyO3. The core crate has no
 Python dependency.
 
-## Why `context-namespace`?
-
-![context-namespace Comparison](assets/comparison.png)
-
 ## How Compaction Works
 
 ```mermaid
