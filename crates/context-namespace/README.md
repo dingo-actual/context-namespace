@@ -510,4 +510,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## License
 
-Apache-2.0
+Licensed under the [Apache License, Version 2.0](LICENSE).
+
+Copyright 2026 Ryan P. Taylor — ryan@beta-reduce.net
+
+Apache 2 grants a patent license and permits commercial and private use,
+modification, and redistribution, provided the license and copyright notice are
+kept and any modified files carry prominent change notices. It is not a
+permissive-without-conditions license: it offers no warranty and no liability.
